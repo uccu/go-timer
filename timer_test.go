@@ -29,15 +29,30 @@ func (t *Gr) Run() {
 func TestA(t *testing.T) {
 
 	timer := timer.New()
+	for {
+		time.Sleep(time.Millisecond * 100)
+		m := time.Now().UnixMilli()
+		if m/100%10 == 5 {
+			fmt.Println(m)
+			break
+		}
+	}
 	timer.Start()
 
 	timerFunc := &Gr{}
 	timerFunc.groupId = 123
-	timerFunc.uinx = time.Now().Add(2 * time.Second).Unix()
+	timerFunc.uinx = time.Now().Add(1 * time.Second).Unix()
 	timerFunc.run = func() {
-		fmt.Println(111)
+		fmt.Println(time.Now().UnixMilli())
+		timerFunc.uinx = time.Now().Add(1 * time.Second).Unix()
+		timer.AddTimerFunc(timerFunc)
 	}
+
 	timer.AddTimerFunc(timerFunc)
-	timer.Stop()
+	// timer.Stop()
+
+	for {
+		time.Sleep(1)
+	}
 
 }

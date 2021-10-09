@@ -90,6 +90,13 @@ func (c *Timer) Start() {
 
 	go func() {
 		for {
+			time.Sleep(time.Millisecond * 100)
+			m := time.Now().UnixMilli()
+			if m/100%10 == 5 {
+				break
+			}
+		}
+		for {
 			<-ticker.C
 			if !c.exec(ctx) {
 				ticker.Stop()
