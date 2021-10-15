@@ -6,27 +6,46 @@ import (
 	"time"
 )
 
-type TimerFunc interface {
-	Run()
-	GetGroupId() interface{}
-	GetUnix() int64
+type TimerFunc struct {
+	Run     func()
+	GroupId interface{}
+	Unix    int64
 }
 
 type Timer struct {
-	group     map[interface{}][]TimerFunc
-	uinx      map[int64][]TimerFunc
-	mu        sync.RWMutex
-	ctxCancel context.CancelFunc
+	group      map[interface{}][]TimerFunc
+	uinx       map[int64][]TimerFunc
+	mu         sync.RWMutex
+	ctxCancel  context.CancelFunc
+	errHandler func(err interface{})
+}
+
+func (c *Timer) run(t TimerFunc) {
+	go func() {
+		defer func() {
+			if err := recover(); err != nil {
+				if c.errHandler != nil {
+					c.errHandler(err)
+				}
+			}
+		}()
+		t.Run()
+	}()
+
 }
 
 func (c *Timer) AddTimerFunc(t TimerFunc) {
 
+	if t.Run == nil {
+		return
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	unix := t.GetUnix()
+	unix := t.Unix
 	if unix <= time.Now().Unix() {
-		go t.Run()
+		c.run(t)
 		return
 	}
 
@@ -36,7 +55,7 @@ func (c *Timer) AddTimerFunc(t TimerFunc) {
 		c.uinx[unix] = []TimerFunc{t}
 	}
 
-	groupId := t.GetGroupId()
+	groupId := t.GroupId
 	if groupId != nil {
 		if timers, ok := c.group[groupId]; ok {
 			c.group[groupId] = append(timers, t)
@@ -58,7 +77,7 @@ func (c *Timer) DelGroup(groupId interface{}) {
 
 	for _, timer := range timers {
 
-		unix := timer.GetUnix()
+		unix := timer.Unix
 		timers, ok := c.uinx[unix]
 		if !ok {
 			continue
@@ -66,7 +85,7 @@ func (c *Timer) DelGroup(groupId interface{}) {
 
 		ntimers := []TimerFunc{}
 		for _, timer := range timers {
-			if timer.GetGroupId() != groupId {
+			if timer.GroupId != groupId {
 				ntimers = append(ntimers, timer)
 			}
 		}
@@ -108,6 +127,10 @@ func (c *Timer) Start() {
 	c.ctxCancel = cancel
 }
 
+func (c *Timer) SetErrhandler(i func(interface{})) {
+	c.errHandler = i
+}
+
 func (c *Timer) Stop() {
 	c.ctxCancel()
 }
@@ -131,8 +154,8 @@ func (c *Timer) exec(ctx context.Context) bool {
 	}
 
 	for _, timer := range timers {
-		go timer.Run()
-		groupId := timer.GetGroupId()
+		c.run(timer)
+		groupId := timer.GroupId
 		timers, ok := c.group[groupId]
 		if !ok {
 			continue
@@ -140,7 +163,7 @@ func (c *Timer) exec(ctx context.Context) bool {
 
 		ntimers := []TimerFunc{}
 		for _, timer := range timers {
-			if timer.GetUnix() != unix {
+			if timer.Unix != unix {
 				ntimers = append(ntimers, timer)
 			}
 		}
