@@ -2,6 +2,7 @@ package timer_test
 
 import (
 	"fmt"
+	"runtime/debug"
 	"testing"
 	"time"
 
@@ -31,18 +32,19 @@ func TestA(t *testing.T) {
 	ti := timer.New()
 
 	ti.SetErrhandler(func(i interface{}) {
-		fmt.Print(i)
+		fmt.Println(i)
+		fmt.Println(string(debug.Stack()))
 	})
 	ti.Start()
 
-	ti.AddTimerFunc(timer.TimerFunc{
-		GroupId: 123,
-		Unix:    time.Now().Add(1 * time.Second).Unix(),
-		Run: func() {
+	ti.AddTimerFunc(timer.NewTimerFunc(
+		time.Now().Add(-1*time.Second),
+		func() {
 			var w *int
-			fmt.Println(*w)
+			fmt.Println(w)
 		},
-	})
+		"111", "222",
+	))
 
 	for {
 		time.Sleep(time.Second)

@@ -6,21 +6,56 @@ import (
 	"time"
 )
 
+type State int
+
+const (
+	OPEN State = iota
+	CLOSED
+)
+
 type TimerFunc struct {
-	Run     func()
-	GroupId interface{}
-	Unix    int64
+	run      func()
+	groupIds []string
+	time     time.Time
+	timer    *Timer
+	state    State
+	next     *TimerFunc
+}
+
+func (f *TimerFunc) Delete() {
+	if f.state == CLOSED {
+		return
+	}
+
+	f.state = CLOSED
+	f.timer.delTimerFunc(f)
+}
+
+func (f *TimerFunc) Run() {
+	if f.state == CLOSED {
+		return
+	}
+	f.state = CLOSED
+	f.run()
+}
+
+func NewTimerFunc(t time.Time, r func(), g ...string) *TimerFunc {
+	return &TimerFunc{
+		run:      r,
+		groupIds: g,
+		time:     t,
+	}
 }
 
 type Timer struct {
-	group      map[interface{}][]TimerFunc
-	uinx       map[int64][]TimerFunc
+	group      map[string][]*TimerFunc
+	unix       *TimerFunc
 	mu         sync.RWMutex
 	ctxCancel  context.CancelFunc
 	errHandler func(err interface{})
 }
 
-func (c *Timer) run(t TimerFunc) {
+func (c *Timer) run(t *TimerFunc) {
 	go func() {
 		defer func() {
 			if err := recover(); err != nil {
@@ -34,72 +69,111 @@ func (c *Timer) run(t TimerFunc) {
 
 }
 
-func (c *Timer) AddTimerFunc(t TimerFunc) {
-
-	if t.Run == nil {
-		return
-	}
+func (c *Timer) AddTimerFunc(t *TimerFunc) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	unix := t.Unix
-	if unix <= time.Now().Unix() {
+	t.timer = c
+
+	if t.time.Unix() <= time.Now().Unix() {
 		c.run(t)
 		return
 	}
 
-	if timers, ok := c.uinx[unix]; ok {
-		c.uinx[unix] = append(timers, t)
-	} else {
-		c.uinx[unix] = []TimerFunc{t}
+	var prev *TimerFunc
+	next := c.unix
+
+	for {
+		if next == nil || next.time.After(t.time) {
+			t.next = next
+			if prev != nil {
+				prev.next = t
+			} else {
+				c.unix = t
+			}
+			break
+		}
+		prev = next
+		next = next.next
 	}
 
-	groupId := t.GroupId
-	if groupId != nil {
-		if timers, ok := c.group[groupId]; ok {
-			c.group[groupId] = append(timers, t)
+	for _, g := range t.groupIds {
+		if timers, ok := c.group[g]; ok {
+			c.group[g] = append(timers, t)
 		} else {
-			c.group[groupId] = []TimerFunc{t}
+			c.group[g] = []*TimerFunc{t}
 		}
 	}
-}
 
-func (c *Timer) DelGroup(groupId interface{}) {
+}
+func (c *Timer) delUnixTimerFunc(f *TimerFunc) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	timers, ok := c.group[groupId]
-	if !ok {
-		return
+	var prev *TimerFunc
+	next := c.unix
+	for {
+		if next == f {
+			if prev == nil {
+				c.unix = next.next
+			} else {
+				prev.next = next.next
+			}
+			break
+		}
+		prev = next
+		next = next.next
 	}
+}
 
-	for _, timer := range timers {
+func (c *Timer) delGroupTimerFunc(f *TimerFunc) {
 
-		unix := timer.Unix
-		timers, ok := c.uinx[unix]
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, g := range f.groupIds {
+		timers, ok := c.group[g]
 		if !ok {
-			continue
+			return
 		}
 
-		ntimers := []TimerFunc{}
-		for _, timer := range timers {
-			if timer.GroupId != groupId {
-				ntimers = append(ntimers, timer)
+		for k, t := range timers {
+			if t == f {
+				timers = append(timers[:k], timers[k+1:]...)
+				break
 			}
 		}
 
-		if len(ntimers) == 0 {
-			delete(c.uinx, unix)
-			continue
+		c.group[g] = timers
+		if len(timers) == 0 {
+			delete(c.group, g)
 		}
 
-		c.uinx[unix] = ntimers
 	}
 
-	delete(c.group, groupId)
+	f.groupIds = []string{}
+}
 
+func (c *Timer) delTimerFunc(f *TimerFunc) {
+
+	c.delUnixTimerFunc(f)
+
+	c.delGroupTimerFunc(f)
+
+}
+
+func (c *Timer) DelGroup(groupId string) {
+	c.mu.RLock()
+	timers, ok := c.group[groupId]
+	c.mu.RUnlock()
+	if !ok {
+		return
+	}
+	for _, t := range timers {
+		t.Delete()
+	}
 }
 
 func (c *Timer) Start() {
@@ -108,13 +182,6 @@ func (c *Timer) Start() {
 	ctx, cancel := context.WithCancel(context.TODO())
 
 	go func() {
-		for {
-			time.Sleep(time.Millisecond * 100)
-			m := time.Now().UnixMilli()
-			if m/100%10 == 5 {
-				break
-			}
-		}
 		for {
 			<-ticker.C
 			if !c.exec(ctx) {
@@ -143,40 +210,22 @@ func (c *Timer) exec(ctx context.Context) bool {
 	default:
 	}
 
-	unix := time.Now().Unix()
+	unix := time.Now()
+	timer := c.unix
+	for {
+		if timer == nil {
+			break
+		}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+		if !timer.time.After(unix) {
+			c.run(timer)
+			c.delTimerFunc(timer)
+		} else {
+			break
+		}
 
-	timers, ok := c.uinx[unix]
-	if !ok {
-		return true
+		timer = timer.next
 	}
 
-	for _, timer := range timers {
-		c.run(timer)
-		groupId := timer.GroupId
-		timers, ok := c.group[groupId]
-		if !ok {
-			continue
-		}
-
-		ntimers := []TimerFunc{}
-		for _, timer := range timers {
-			if timer.Unix != unix {
-				ntimers = append(ntimers, timer)
-			}
-		}
-
-		if len(ntimers) == 0 {
-			delete(c.group, groupId)
-			continue
-		}
-
-		c.group[groupId] = ntimers
-	}
-
-	delete(c.uinx, unix)
 	return true
-
 }
