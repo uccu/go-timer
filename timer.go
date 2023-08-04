@@ -27,11 +27,12 @@ func (f *TimerFunc) GetGroups() []string {
 	return f.groupIds
 }
 
-func (f *TimerFunc) Set(key string, value interface{}) {
+func (f *TimerFunc) Set(key string, value interface{}) *TimerFunc {
 	if f.data == nil {
 		f.data = map[string]interface{}{}
 	}
 	f.data[key] = value
+	return f
 }
 
 func (f *TimerFunc) Get(key string) interface{} {
