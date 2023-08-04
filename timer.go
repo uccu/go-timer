@@ -14,12 +14,35 @@ const (
 )
 
 type TimerFunc struct {
+	data     map[string]interface{}
 	run      func()
 	groupIds []string
 	time     time.Time
 	timer    *Timer
 	state    State
 	next     *TimerFunc
+}
+
+func (f *TimerFunc) GetGroups() []string {
+	return f.groupIds
+}
+
+func (f *TimerFunc) Set(key string, value interface{}) {
+	if f.data == nil {
+		f.data = map[string]interface{}{}
+	}
+	f.data[key] = value
+}
+
+func (f *TimerFunc) Get(key string) interface{} {
+	if f.data == nil {
+		return nil
+	}
+	value, ok := f.data[key]
+	if !ok {
+		return nil
+	}
+	return value
 }
 
 func (f *TimerFunc) Delete() {
