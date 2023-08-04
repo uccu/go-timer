@@ -164,16 +164,20 @@ func (c *Timer) delTimerFunc(f *TimerFunc) {
 
 }
 
-func (c *Timer) DelGroup(groupId string) {
+func (c *Timer) DelGroup(groupId string) []*TimerFunc {
 	c.mu.RLock()
 	timers, ok := c.group[groupId]
+	timersCopy := make([]*TimerFunc, len(timers))
+	copy(timersCopy, timers)
 	c.mu.RUnlock()
 	if !ok {
-		return
+		return nil
 	}
-	for _, t := range timers {
+
+	for _, t := range timersCopy {
 		t.Delete()
 	}
+	return timersCopy
 }
 
 func (c *Timer) Start() {
