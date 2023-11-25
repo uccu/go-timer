@@ -2,7 +2,6 @@ package timer
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 )
@@ -54,8 +53,6 @@ func (t *timer) GetCountData() *CountData {
 
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-
-	fmt.Println("GetCountData", time.Now().Format("2006-01-02 15:04:05.999999"))
 
 	timerFuncCount := 0
 	next := t.next
@@ -217,8 +214,6 @@ func (t *timer) exec() {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
-
-	fmt.Println("exec", time.Now().Format("2006-01-02 15:04:05.999999"))
 
 	if t.state == CLOSED {
 		return
