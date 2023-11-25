@@ -115,6 +115,9 @@ func (t *timer) delUnixTimerFunc(f TimerFunc) {
 	var prev TimerFunc
 	next := t.next
 	for {
+		if next == nil {
+			break
+		}
 		if next == f {
 			if prev == nil {
 				t.next = next.getNext()
@@ -124,9 +127,7 @@ func (t *timer) delUnixTimerFunc(f TimerFunc) {
 			break
 		}
 		prev = next
-		if next != nil {
-			next = next.getNext()
-		}
+		next = next.getNext()
 	}
 }
 
@@ -161,14 +162,16 @@ func (t *timer) DelGroup(groupId string) []TimerFunc {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	fns, ok := t.group[groupId]
+	fnsCopy := make([]TimerFunc, len(fns))
+	copy(fnsCopy, fns)
 	if !ok {
 		return nil
 	}
 
-	for _, f := range fns {
+	for _, f := range fnsCopy {
 		t.delTimerFunc(f)
 	}
-	return fns
+	return fnsCopy
 }
 
 func (t *timer) Start() {
