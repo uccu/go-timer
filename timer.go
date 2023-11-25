@@ -127,7 +127,9 @@ func (t *timer) delUnixTimerFunc(f TimerFunc) {
 			break
 		}
 		prev = next
-		next = next.getNext()
+		if next != nil {
+			next = next.getNext()
+		}
 	}
 }
 
