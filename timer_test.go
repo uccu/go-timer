@@ -2,6 +2,7 @@ package timer_test
 
 import (
 	"fmt"
+	"log"
 	"runtime/debug"
 	"testing"
 	"time"
@@ -9,45 +10,41 @@ import (
 	"github.com/uccu/go-timer"
 )
 
-type Gr struct {
-	groupId int64
-	uinx    int64
-	run     func()
-}
-
-func (t *Gr) GetGroupId() interface{} {
-	return t.groupId
-}
-
-func (t *Gr) GetUnix() int64 {
-	return t.uinx
-}
-
-func (t *Gr) Run() {
-	t.run()
-}
-
 func TestA(t *testing.T) {
 
 	ti := timer.New()
-
 	ti.SetErrhandler(func(i interface{}) {
-		fmt.Println(i)
-		fmt.Println(string(debug.Stack()))
+		log.Printf("[ERROR] error: %s, stack: %s", fmt.Sprint(i), string(debug.Stack()))
 	})
 	ti.Start()
 
-	ti.AddTimerFunc(timer.NewTimerFunc(
-		time.Now().Add(-1*time.Second),
-		func() {
-			var w *int
-			fmt.Println(w)
-		},
-		"111", "222",
-	))
+	now := time.Now()
+
+	for i := 0; i < 100; i++ {
+
+		ti.AddTimerFunc(timer.NewTimerFunc(now.Add(2*time.Second), func() {
+			fmt.Println("timer2", time.Since(now))
+		}, "activity", "activity:2"))
+		ti.AddTimerFunc(timer.NewTimerFunc(now.Add(1*time.Second), func() {
+			fmt.Println("timer1", time.Since(now))
+		}, "activity", "activity:1"))
+		ti.AddTimerFunc(timer.NewTimerFunc(now.Add(-1*time.Second), func() {
+			fmt.Println("timer-1", time.Since(now))
+		}, "activity", "activity:-1"))
+		ti.AddTimerFunc(timer.NewTimerFunc(now, func() {
+			fmt.Println("timer0", time.Since(now))
+		}, "activity", "activity:0"))
+		ti.AddTimerFunc(timer.NewTimerFunc(now.Add(3*time.Second), func() {
+			fmt.Println("timer3", time.Since(now))
+		}, "activity", "activity:3"))
+		ti.AddTimerFunc(timer.NewTimerFunc(now.Add(4*time.Second), func() {
+			fmt.Println("timer4", time.Since(now))
+		}, "activity", "activity:4"))
+	}
 
 	for {
-		time.Sleep(time.Second)
+		fmt.Println(*ti.GetCountData())
+		time.Sleep(time.Second * 1)
 	}
 
 }

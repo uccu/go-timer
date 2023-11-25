@@ -2,258 +2,241 @@ package timer
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 )
 
-type State int
+type Timer interface {
+	Start()                          // 运行定时器
+	Stop()                           // 停止定时器
+	DelGroup(string) []TimerFunc     // 删除分组
+	SetErrhandler(func(interface{})) // 设置错误处理函数
+	AddTimerFunc(TimerFunc)          // 添加运行函数
+	GetCountData() *CountData        // 获取计数数据
 
-const (
-	OPEN State = iota
-	CLOSED
-)
-
-type TimerFunc struct {
-	data     map[string]interface{}
-	run      func()
-	groupIds []string
-	time     time.Time
-	timer    *Timer
-	state    State
-	next     *TimerFunc
+	run(TimerFunc)
+	delUnixTimerFunc(TimerFunc)
+	delGroupTimerFunc(TimerFunc)
+	delTimerFunc(TimerFunc)
+	exec()
 }
 
-func (f *TimerFunc) GetGroups() []string {
-	return f.groupIds
-}
-
-func (f *TimerFunc) Set(key string, value interface{}) *TimerFunc {
-	if f.data == nil {
-		f.data = map[string]interface{}{}
-	}
-	f.data[key] = value
-	return f
-}
-
-func (f *TimerFunc) Get(key string) interface{} {
-	if f.data == nil {
-		return nil
-	}
-	value, ok := f.data[key]
-	if !ok {
-		return nil
-	}
-	return value
-}
-
-func (f *TimerFunc) Delete() {
-	if f.state == CLOSED {
-		return
-	}
-
-	f.state = CLOSED
-	f.timer.delTimerFunc(f)
-}
-
-func (f *TimerFunc) Run() {
-	if f.state == CLOSED {
-		return
-	}
-	f.state = CLOSED
-	f.run()
-}
-
-func NewTimerFunc(t time.Time, r func(), g ...string) *TimerFunc {
-	return &TimerFunc{
-		run:      r,
-		groupIds: g,
-		time:     t,
-	}
-}
-
-type Timer struct {
-	group      map[string][]*TimerFunc
-	unix       *TimerFunc
+type timer struct {
+	state      State
+	group      map[string][]TimerFunc
+	next       TimerFunc
 	mu         sync.RWMutex
 	ctxCancel  context.CancelFunc
-	errHandler func(err interface{})
+	errHandler func(interface{})
 }
 
-func (c *Timer) run(t *TimerFunc) {
+func (t *timer) run(f TimerFunc) {
 	go func() {
 		defer func() {
 			if err := recover(); err != nil {
-				if c.errHandler != nil {
-					c.errHandler(err)
+				if t.errHandler != nil {
+					t.errHandler(err)
 				}
 			}
 		}()
-		t.Run()
+		f.Run()
 	}()
-
 }
 
-func (c *Timer) AddTimerFunc(t *TimerFunc) {
+type CountData struct {
+	GroupCount     int
+	GroupMapCount  map[string]int
+	TimerFuncCount int
+}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (t *timer) GetCountData() *CountData {
 
-	t.timer = c
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 
-	if t.time.Unix() <= time.Now().Unix() {
-		c.run(t)
+	fmt.Println("GetCountData", time.Now().Format("2006-01-02 15:04:05.999999"))
+
+	timerFuncCount := 0
+	next := t.next
+	for next != nil {
+		timerFuncCount++
+		next = next.getNext()
+	}
+
+	groupMapCount := make(map[string]int)
+	for k, v := range t.group {
+		groupMapCount[k] = len(v)
+	}
+	return &CountData{
+		GroupCount:     len(t.group),
+		GroupMapCount:  groupMapCount,
+		TimerFuncCount: timerFuncCount,
+	}
+}
+
+func (t *timer) AddTimerFunc(f TimerFunc) {
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	f.setTimer(t)
+
+	if !f.GetTime().After(time.Now()) {
+		t.run(f)
 		return
 	}
 
-	var prev *TimerFunc
-	next := c.unix
+	var prev TimerFunc
+	next := t.next
 
 	for {
-		if next == nil || next.time.After(t.time) {
-			t.next = next
+		if next == nil || next.GetTime().After(f.GetTime()) {
+			f.setNext(next)
 			if prev != nil {
-				prev.next = t
+				prev.setNext(f)
 			} else {
-				c.unix = t
+				t.next = f
 			}
 			break
 		}
 		prev = next
-		next = next.next
+		next = next.getNext()
 	}
 
-	for _, g := range t.groupIds {
-		if timers, ok := c.group[g]; ok {
-			c.group[g] = append(timers, t)
+	for _, g := range f.GetGroups() {
+		if timers, ok := t.group[g]; ok {
+			t.group[g] = append(timers, f)
 		} else {
-			c.group[g] = []*TimerFunc{t}
+			t.group[g] = []TimerFunc{f}
 		}
 	}
 
 }
-func (c *Timer) delUnixTimerFunc(f *TimerFunc) {
+func (t *timer) delUnixTimerFunc(f TimerFunc) {
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	var prev *TimerFunc
-	next := c.unix
+	var prev TimerFunc
+	next := t.next
 	for {
 		if next == f {
 			if prev == nil {
-				c.unix = next.next
+				t.next = next.getNext()
 			} else {
-				prev.next = next.next
+				prev.setNext(next.getNext())
 			}
 			break
 		}
 		prev = next
-		next = next.next
+		next = next.getNext()
 	}
 }
 
-func (c *Timer) delGroupTimerFunc(f *TimerFunc) {
+func (t *timer) delGroupTimerFunc(f TimerFunc) {
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	for _, g := range f.groupIds {
-		timers, ok := c.group[g]
+	for _, g := range f.GetGroups() {
+		fns, ok := t.group[g]
 		if !ok {
-			return
+			continue
 		}
 
-		for k, t := range timers {
+		for k, t := range fns {
 			if t == f {
-				timers = append(timers[:k], timers[k+1:]...)
+				fns = append(fns[:k], fns[k+1:]...)
 				break
 			}
 		}
 
-		c.group[g] = timers
-		if len(timers) == 0 {
-			delete(c.group, g)
+		t.group[g] = fns
+		if len(fns) == 0 {
+			delete(t.group, g)
 		}
-
 	}
-
-	f.groupIds = []string{}
 }
 
-func (c *Timer) delTimerFunc(f *TimerFunc) {
-
-	c.delUnixTimerFunc(f)
-
-	c.delGroupTimerFunc(f)
-
+func (t *timer) delTimerFunc(f TimerFunc) {
+	t.delUnixTimerFunc(f)
+	t.delGroupTimerFunc(f)
 }
 
-func (c *Timer) DelGroup(groupId string) []*TimerFunc {
-	c.mu.RLock()
-	timers, ok := c.group[groupId]
-	timersCopy := make([]*TimerFunc, len(timers))
-	copy(timersCopy, timers)
-	c.mu.RUnlock()
+func (t *timer) DelGroup(groupId string) []TimerFunc {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	fns, ok := t.group[groupId]
 	if !ok {
 		return nil
 	}
 
-	for _, t := range timersCopy {
-		t.Delete()
+	for _, f := range fns {
+		t.delTimerFunc(f)
 	}
-	return timersCopy
+	return fns
 }
 
-func (c *Timer) Start() {
+func (t *timer) Start() {
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	ticker := time.NewTicker(time.Second)
 	ctx, cancel := context.WithCancel(context.TODO())
+	t.state = OPEN
 
 	go func() {
 		for {
-			<-ticker.C
-			if !c.exec(ctx) {
-				ticker.Stop()
-				break
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				go t.exec()
 			}
 		}
 	}()
 
-	c.ctxCancel = cancel
+	t.ctxCancel = cancel
 }
 
-func (c *Timer) SetErrhandler(i func(interface{})) {
-	c.errHandler = i
+func (t *timer) SetErrhandler(i func(interface{})) {
+	t.errHandler = i
 }
 
-func (c *Timer) Stop() {
-	c.ctxCancel()
+func (t *timer) Stop() {
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.state != OPEN {
+		t.state = CLOSED
+		t.ctxCancel()
+	}
+
 }
 
-func (c *Timer) exec(ctx context.Context) bool {
+func (t *timer) exec() {
 
-	select {
-	case <-ctx.Done():
-		return false
-	default:
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	fmt.Println("exec", time.Now().Format("2006-01-02 15:04:05.999999"))
+
+	if t.state == CLOSED {
+		return
 	}
 
 	unix := time.Now()
-	timer := c.unix
+	f := t.next
 	for {
-		if timer == nil {
+		if f == nil {
 			break
 		}
 
-		if !timer.time.After(unix) {
-			c.run(timer)
-			c.delTimerFunc(timer)
+		if !f.GetTime().After(unix) {
+			t.run(f)
+			t.delTimerFunc(f)
 		} else {
 			break
 		}
 
-		timer = timer.next
+		f = f.getNext()
 	}
 
-	return true
 }
